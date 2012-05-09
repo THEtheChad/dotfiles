@@ -1,7 +1,11 @@
 clear
 
 # FAVORITES
-alias lunchup='cd ~/Localhost/LunchUp;open -a Sublime .;open .'
+alias lunchup='cd ~/Sites/lunchup;open -a Sublime .;open .'
+
+# APPLICATION SHORTCUTS
+alias sublime='open -a Sublime'
+alias chrome='open -a Google\ Chrome'
 
 # SETTINGS
 # defaults write com.apple.finder AppleShowAllFiles TRUE
@@ -9,10 +13,6 @@ alias lunchup='cd ~/Localhost/LunchUp;open -a Sublime .;open .'
 # CUSTOM PROMPT
 export PS1='\[\033[33m\]\h\n\$\[\033[0m\] '
 export PATH=$PATH:~/Configs/bin
-
-# APPLICATION SHORTCUTS
-alias sublime='open -a Sublime'
-alias chrome='open -a Google\ Chrome'
 
 # BOILER PLATES
 alias html='echo "Project name:"; read name; cp -r ~/Configs/boiler_html ~/Desktop/$name; sublime ~/Desktop/$name'
