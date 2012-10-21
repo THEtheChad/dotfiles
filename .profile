@@ -14,6 +14,9 @@ alias html='echo "Project name:"; read name; cp -r ~/Configs/boiler_html ~/Deskt
 alias html5='echo "Project name:"; read name; cp -r ~/Configs/boiler_html5 ~/Desktop/$name; cd ~/Desktop/$name; sublime .'
 alias wordpress='echo "Project name:"; read name; cp -r ~/Configs/roots ~/Sites/wordpress/wp-content/themes/$name; cd ~/Sites/wordpress/wp-content/themes/$name; sublime .'
 
+# UTILITIES
+alias color="sh ~/Configs/colors.sh"
+
 # HAPPY FUN TIMES
 alias saver='/System/Library/Frameworks/ScreenSaver.framework/Resources/ScreenSaverEngine.app/Contents/MacOS/ScreenSaverEngine -background'
 
