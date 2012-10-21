@@ -10,6 +10,6 @@ filetype on
 filetype indent on
 filetype plugin on
 
-colorscheme deveiate
+colorscheme wombat 
 
 set number
