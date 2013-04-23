@@ -2,6 +2,20 @@
 alias sublime='open -a Sublime'
 alias chrome='open -a Google\ Chrome'
 
+#GIT SHORTCUTS
+alias gs='git status '
+alias ga='git add '
+alias gb='git branch '
+alias gc='git commit'
+alias gd='git diff'
+alias gh='git hist '
+alias go='git checkout '
+alias gk='gitk --all&'
+alias gx='gitx --all'
+
+alias got='git '
+alias get='git '
+
 # SETTINGS
 # defaults write com.apple.finder AppleShowAllFiles TRUE
 
