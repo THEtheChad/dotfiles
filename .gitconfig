@@ -1,8 +1,8 @@
 [user]
-	name = user
-	email = user@example.com
+  name = user
+  email = user@example.com
 [core]
-	excludesfile = /Users/user/Configs/.gitignore
+  excludesfile = ~/Configs/.gitignore
 [github]
   user = user
 [color]
