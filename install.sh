@@ -51,5 +51,7 @@ curl https://raw.github.com/creationix/nvm/master/install.sh | sh
 
 waypoint "NVM"
 
+
+
 # Update mac config
 source .osx
