@@ -9,11 +9,11 @@ function waypoint() {
     return;
   fi
 
-  echo
+  echo;
   echo -e "\033[1;34;47m  $1 installation has completed!  \033[m"
   echo "Would you like to continue the installation process? (y/n)"
   read -p "$ " -n 1
-  echo
+  echo;
 
   if [[ $REPLY =~ ^[Nn]$ ]]; then
     exit 1
@@ -49,8 +49,5 @@ waypoint "RVM"
 
 # https://github.com/creationix/nvm
 curl https://raw.github.com/creationix/nvm/master/install.sh | sh
-echo
-echo "Don't forget to install NPM!"
-echo
 
 waypoint "NVM"
