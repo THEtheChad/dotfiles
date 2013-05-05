@@ -3,7 +3,10 @@
 	email = user@example.com
 [core]
 	excludesfile = /Users/user/Configs/.gitignore
-
+[github]
+  user = user
+[color]
+  ui = always
 [alias]
   co = checkout
   ci = commit
