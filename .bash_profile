@@ -7,7 +7,4 @@ for file in ~/Configs/.{profile,bashrc}; do
 done
 unset file
 
-[[ -s "$HOME/.rvm/scripts/rvm" ]] && source "$HOME/.rvm/scripts/rvm"
-[[ -s /Users/THEtheChad/.nvm/nvm.sh ]] && . /Users/THEtheChad/.nvm/nvm.sh # This loads NVM
-
 # Autoappended
