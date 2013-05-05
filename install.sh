@@ -1,6 +1,6 @@
 #!/bin/bash
 
-sync.sh
+bash sync.sh
 
 prompt=$1
 
@@ -23,7 +23,6 @@ function waypoint() {
 
 
 # homebrew!
-# you need the code CLI tools YOU FOOL.
 echo "Make sure the CLI tools for xCode are installed."
 echo "Are you ready to continue? (y/n)"
 read -p "$ " -n 1
