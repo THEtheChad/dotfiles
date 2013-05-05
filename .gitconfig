@@ -3,7 +3,10 @@
 	email = chad.d.elliott@gmail.com
 [core]
 	excludesfile = /Users/THEtheChad/Configs/.gitignore
-
+[github]
+  user = THEtheChad
+[color]
+  ui = always
 [alias]
   co = checkout
   ci = commit
