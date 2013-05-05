@@ -1,8 +1,8 @@
 [user]
-	name = THEtheChad
-	email = chad.d.elliott@gmail.com
+  name = THEtheChad
+  email = chad.d.elliott@gmail.com
 [core]
-	excludesfile = /Users/THEtheChad/Configs/.gitignore
+  excludesfile = ~/Configs/.gitignore
 [github]
   user = THEtheChad
 [color]
