@@ -44,6 +44,9 @@ alias trimcopy="tr -d '\n' | pbcopy"
 # Recursively delete `.DS_Store` files
 alias cleanup="find . -name '*.DS_Store' -type f -ls -delete"
 
+# Kill all screen sessions
+alias windex="kill $(screen -list | grep '^\t' | sed 's/[^0-9]*\([0-9]*\).*/\1/')"
+
 # Shortcuts
 alias g="git"
 alias v="vim"
@@ -54,3 +57,9 @@ alias emptytrash="sudo rm -rfv /Volumes/*/.Trashes; rm -rfv ~/.Trash"
 # Hide/show all desktop icons (useful when presenting)
 alias hidedesktop="defaults write com.apple.finder CreateDesktop -bool false && killall Finder"
 alias showdesktop="defaults write com.apple.finder CreateDesktop -bool true && killall Finder"
+
+# Useful to have
+alias resetOpenWith="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -kill -r -domain local -domain system -domain user"
+
+# Simple Server
+alias server="python -m SimpleHTTPServer"

@@ -9,3 +9,6 @@ export LANG="en_US"
 
 [[ -s "$HOME/.rvm/scripts/rvm" ]] && source "$HOME/.rvm/scripts/rvm"
 [[ -s "$HOME/.nvm/nvm.sh" ]] && source "$HOME/.nvm/nvm.sh"
+[[ -x "$HOME/Configs/code/z/z.sh" ]] && source "$HOME/Configs/code/z/z.sh"
+
+export PATH="/usr/local/bin:$PATH"
