@@ -22,6 +22,17 @@ function waypoint() {
 
 
 
+# https://github.com/rupa/z
+# z, oh how i love you
+mkdir -p code/z
+curl https://raw.github.com/rupa/z/master/z.sh > code/z/z.sh
+chmod +x code/z/z.sh
+# also consider moving over your current .z file if possible. it's painful to rebuild :)
+
+waypoint "Z"
+
+
+
 # homebrew!
 echo "Make sure the CLI tools for xCode are installed."
 echo "Are you ready to continue? (y/n)"
