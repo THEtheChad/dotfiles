@@ -64,5 +64,19 @@ waypoint "NVM"
 
 
 
+# jq
+brew install jq
+
+waypoint "jq"
+
+
+
+# ngrep
+brew install ngrep
+
+waypoint "ngrep"
+
+
+
 # Update mac config
 source .osx
