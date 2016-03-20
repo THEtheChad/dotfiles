@@ -65,4 +65,6 @@ fi
 
 
 # Update mac config
-source .osx
+if waypoint "Mac defaults"; then
+	source .osx
+fi
