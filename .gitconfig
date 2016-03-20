@@ -2,7 +2,7 @@
   name = user
   email = user@example.com
 [core]
-  excludesfile = ~/Configs/.gitignore
+  excludesfile = ~/dotfiles/.gitignore
 [github]
   user = user
 [color]
