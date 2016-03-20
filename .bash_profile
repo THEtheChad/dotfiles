@@ -1,6 +1,6 @@
-export PATH="${HOME}/Configs:$PATH"
+export PATH="${HOME}/dotfiles:$PATH"
 
-for file in ~/Configs/.{profile,bashrc}; do
+for file in ~/dotfiles/.{profile,bashrc}; do
   if [ -r "$file" ]; then
     source "$file";
   fi
