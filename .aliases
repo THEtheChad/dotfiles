@@ -38,9 +38,6 @@ alias ips="ifconfig -a | perl -nle'/(\d+\.\d+\.\d+\.\d+)/ && print $1'"
 # Servers
 alias simple="python -m SimpleHTTPServer"
 
-# Enhanced WHOIS lookups
-alias whois="whois -h whois-servers.net"
-
 # Trim new lines and copy to clipboard
 alias trimcopy="tr -d '\n' | pbcopy"
 
@@ -63,6 +60,3 @@ alias showdesktop="defaults write com.apple.finder CreateDesktop -bool true && k
 
 # Useful to have
 alias resetOpenWith="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -kill -r -domain local -domain system -domain user"
-
-# Simple Server
-alias server="python -m SimpleHTTPServer"
