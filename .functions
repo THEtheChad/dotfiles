@@ -21,6 +21,11 @@ function scpp() {
     echo "Copied to clipboard: http://thethechad.com/i/$1"
 }
 
+# shortcut for copying ssh key to remote host
+function cpssh(){
+  cat ~/.ssh/id_rsa.pub | ssh $1 "mkdir -p ~/.ssh && cat >>  ~/.ssh/authorized_keys"
+}
+
 # get gzipped size
 function gz() {
   echo "orig size    (bytes): "
