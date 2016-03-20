@@ -2,7 +2,7 @@
   name = THEtheChad
   email = chad.d.elliott@gmail.com
 [core]
-  excludesfile = ~/Configs/.gitignore
+  excludesfile = ~/dotfiles/.gitignore
 [github]
   user = THEtheChad
 [color]
