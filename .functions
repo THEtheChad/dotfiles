@@ -3,6 +3,12 @@ function md() {
   mkdir -p "$@" && cd "$@"
 }
 
+function yarn() {
+  case $* in
+    init* ) shift 1; command yarn init "$@" && curl https://raw.githubusercontent.com/github/gitignore/master/Node.gitignore -o .gitignore ;;
+    * ) command yarn "$@" ;;
+  esac
+}
 
 # find shorthand
 function f() {
