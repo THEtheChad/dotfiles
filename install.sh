@@ -40,21 +40,8 @@ if waypoint "Homebrew"; then
   if [[ $REPLY =~ ^[Nn]$ ]]; then
     exit 1
   fi
-  
-  ruby -e "$(curl -fsSL https://raw.github.com/mxcl/homebrew/go)" && brew doctor
-fi
 
-
-if waypoint "RVM"; then
-  # https://rvm.io
-  # rvm for the rubiess
-  curl -L https://get.rvm.io | bash -s stable --ruby
-fi
-
-
-if waypoint "NVM"; then
-  # https://github.com/creationix/nvm
-  curl https://raw.github.com/creationix/nvm/master/install.sh | sh
+  /usr/bin/ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)" && brew doctor
 fi
 
 # jq
