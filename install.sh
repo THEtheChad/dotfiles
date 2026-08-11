@@ -1,57 +1,29 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Symlink dotfiles into $HOME, backing up anything that would be overwritten.
+set -euo pipefail
 
-bash sync.sh
+DOTFILES="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BACKUP="$HOME/.dotfiles-backup/$(date +%Y%m%d-%H%M%S)"
 
-prompt=$1
+FILES=(.aliases .exports .functions .gitconfig .gitignore_global .vimrc .vim)
 
-function waypoint() {
-  if [ "$prompt" == "-q" ]; then
-    return;
+for name in "${FILES[@]}"; do
+  src="$DOTFILES/$name"
+  dest="$HOME/$name"
+  if [ -e "$dest" ] && [ ! -L "$dest" ]; then
+    mkdir -p "$BACKUP"
+    mv "$dest" "$BACKUP/"
+    echo "backed up $dest -> $BACKUP/$name"
   fi
+  ln -sfn "$src" "$dest"
+  echo "linked   $dest -> $src"
+done
 
-  echo;
-  echo "Would you like to install $1? (y/n)"
-  read -p "$ " -n 1
-  echo;
+# Seed private files (gitignored, never committed) from their templates
+[ -f "$HOME/.extra" ] || { cp "$DOTFILES/.extra.example" "$HOME/.extra"; echo "created  ~/.extra (fill in)"; }
+[ -f "$HOME/.gitconfig.local" ] || { cp "$DOTFILES/.gitconfig.local.example" "$HOME/.gitconfig.local"; echo "created  ~/.gitconfig.local (fill in)"; }
 
-  if [[ $REPLY =~ ^[Nn]$ ]]; then
-    return 1
-  fi
-}
-
-
-if waypoint "Z"; then
-  # https://github.com/rupa/z
-  # z, oh how i love you
-  mkdir -p code/z
-  curl https://raw.github.com/rupa/z/master/z.sh > code/z/z.sh
-  chmod +x code/z/z.sh
-  # also consider moving over your current .z file if possible. it's painful to rebuild :)
-fi
-
-
-if waypoint "Homebrew"; then
-  # homebrew!
-  echo "Make sure the CLI tools for xCode are installed."
-  echo "Are you ready to continue? (y/n)"
-  read -p "$ " -n 1
-  echo
-  
-  if [[ $REPLY =~ ^[Nn]$ ]]; then
-    exit 1
-  fi
-
-  /usr/bin/ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)" && brew doctor
-fi
-
-# jq
-# brew install jq
-
-# ngrep
-# brew install ngrep
-
-
-# Update mac config
-if waypoint "Mac defaults"; then
-	source .osx
-fi
+echo
+echo "Done. Fill in ~/.extra and ~/.gitconfig.local with identity/machine-specific config."
+echo "If ~/.gitconfig was backed up above, migrate anything you still need into ~/.gitconfig.local."
+echo "Optional: ./macos.sh for macOS defaults, 'brew bundle' for packages."
