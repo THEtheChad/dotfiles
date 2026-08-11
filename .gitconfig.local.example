@@ -1,0 +1,7 @@
+# Copy to ~/.gitconfig.local and fill in your identity.
+# The real file is gitignored and must never be committed.
+[user]
+	name = Your Name
+	email = you@example.com
+[github]
+	user = your-github-username

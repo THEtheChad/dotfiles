@@ -1,0 +1,17 @@
+# Copy to ~/.extra and fill in. Sourced at the end of .exports;
+# the real file is gitignored and must never be committed.
+#
+# Identity- and machine-specific shell config lives here so the
+# repo stays generic.
+
+# Example: default GitHub host for gh/git tooling on a work machine
+# export GH_HOST="github.mycompany.com"
+
+# Example: extra PATH entries for this machine
+# export PATH="$HOME/somewhere/bin:$PATH"
+
+# Example: personal file server upload helper
+# scpp() {
+#   scp "$1" you@yourserver.example:~/i &&
+#   printf 'https://yourserver.example/i/%s' "$1" | pbcopy
+# }

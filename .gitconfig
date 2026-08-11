@@ -1,17 +1,24 @@
-[user]
-  name = user
-  email = user@example.com
+# Identity (name/email/github user) lives in ~/.gitconfig.local,
+# which is never committed. See .gitconfig.local.example.
+[include]
+	path = ~/.gitconfig.local
 [core]
-  excludesfile = ~/dotfiles/.gitignore
-[github]
-  user = user
+	excludesfile = ~/.gitignore_global
 [color]
-  ui = always
+	ui = auto
+[init]
+	defaultBranch = main
+[pull]
+	rebase = true
+[push]
+	autoSetupRemote = true
+[rebase]
+	autostash = true
 [alias]
-  co = checkout
-  ci = commit
-  st = status
-  br = branch
-  hist = log --pretty=format:'%h %ad | %s%d [%an]' --graph --date=short
-  type = cat-file -t
-  dump = cat-file -p
+	co = checkout
+	ci = commit
+	st = status
+	br = branch
+	hist = log --pretty=format:'%h %ad | %s%d [%an]' --graph --date=short
+	type = cat-file -t
+	dump = cat-file -p
