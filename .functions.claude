@@ -1,0 +1,114 @@
+# wt — launch an isolated Claude Code session in a git worktree
+#
+# Sourced by .zshrc as a topic file; symlinked into ~ by install.sh.
+# Interactive shells only — wt cd's you into the worktree, so it has to be
+# a function in your shell, not a script in ~/.local/bin.
+#
+# Usage:
+#   wt                    list worktrees
+#   wt feature-a          create (or reattach to) worktree, then launch claude
+#   wt feature-a --resume  extra args are passed through to claude
+#   wt rm feature-a       remove worktree and delete its branch
+#
+# Env:
+#   WT_SAFE=1             launch with permission prompts enabled
+#   WT_NO_LAUNCH=1        set up the worktree and cd there, don't launch
+#   WT_DIR=<path>         where worktrees live (default: sibling of repo root)
+
+wt() {
+  local root repo name dir branch
+
+  if [ "$1" = "rm" ]; then
+    shift
+    _wt_remove "$@"
+    return
+  fi
+
+  root=$(_wt_root) || {
+    echo "wt: not inside a git repository" >&2
+    return 1
+  }
+  repo=$(basename "$root")
+
+  if [ $# -eq 0 ]; then
+    git worktree list
+    return 0
+  fi
+
+  branch=$1
+  shift
+  name=${branch//\//-}
+  dir=${WT_DIR:-$(dirname "$root")}/${repo}-${name}
+
+  if [ -d "$dir" ]; then
+    echo "wt: reattaching to $dir"
+  else
+    if git show-ref --verify --quiet "refs/heads/$branch"; then
+      git worktree add "$dir" "$branch" || return 1
+    else
+      git worktree add "$dir" -b "$branch" || return 1
+    fi
+    _wt_bootstrap "$root" "$dir"
+  fi
+
+  cd "$dir" || return 1
+  [ -n "$WT_NO_LAUNCH" ] && return 0
+  _wt_launch "$@"
+}
+
+# Path of the MAIN worktree, even when called from inside a linked one.
+# rev-parse --show-toplevel would return the linked worktree instead, which
+# made names compound (repo-a -> repo-a-b) and broke `wt rm` from inside.
+# `worktree list` always reports the main worktree first.
+_wt_root() {
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
+  git worktree list --porcelain | head -1 | cut -d' ' -f2-
+}
+
+# Copy the ignored files a fresh worktree needs, then install deps.
+# Add project-specific paths to the `for f in` list as you hit them.
+_wt_bootstrap() {
+  local src=$1 dst=$2 f
+  for f in .env .env.local .envrc .tool-versions; do
+    [ -f "$src/$f" ] && cp "$src/$f" "$dst/$f"
+  done
+
+  ( cd "$dst" || exit
+    if   [ -f pnpm-lock.yaml ];     then pnpm install --prefer-offline
+    elif [ -f yarn.lock ];          then yarn install
+    elif [ -f package-lock.json ];  then npm ci
+    elif [ -f uv.lock ];            then uv sync
+    elif [ -f requirements.txt ];   then
+      python3 -m venv .venv && .venv/bin/pip install -qr requirements.txt
+    fi
+  )
+}
+
+_wt_launch() {
+  local -a cmd=()
+  command -v caffeinate >/dev/null 2>&1 && cmd=(caffeinate -dims)
+  cmd+=(claude)
+  [ -z "$WT_SAFE" ] && cmd+=(--dangerously-skip-permissions)
+  echo "wt: ${cmd[*]} $*"
+  "${cmd[@]}" "$@"
+}
+
+_wt_remove() {
+  local root repo name dir branch
+  root=$(_wt_root) || return 1
+  repo=$(basename "$root")
+  branch=$1
+  [ -z "$branch" ] && { echo "wt rm: need a name" >&2; return 1; }
+  name=${branch//\//-}
+  dir=${WT_DIR:-$(dirname "$root")}/${repo}-${name}
+
+  # Don't delete the tree you're standing in.
+  case "$PWD" in "$dir"*) cd "$root" || return 1 ;; esac
+
+  git worktree remove "$dir" || {
+    echo "wt: uncommitted changes in $dir — use: git worktree remove --force '$dir'" >&2
+    return 1
+  }
+  git branch -d "$branch" 2>/dev/null || \
+    echo "wt: branch '$branch' not fully merged, kept. Delete with: git branch -D '$branch'"
+}
