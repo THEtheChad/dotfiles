@@ -1,0 +1,6 @@
+# Case-insensitive unless the pattern contains an uppercase letter
+--smart-case
+
+# Search hidden files, but never inside .git itself
+--hidden
+--glob=!.git/*

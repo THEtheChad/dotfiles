@@ -1,0 +1,13 @@
+# Host-specific entries (work hosts, identities) live in the gitignored
+# ~/.ssh/config.local, seeded empty by install.sh. It is included first so
+# its settings win over the defaults below (ssh uses first-match-wins).
+Include ~/.ssh/config.local
+
+Host *
+  # Remember passphrases in the macOS keychain
+  AddKeysToAgent yes
+  UseKeychain yes
+  # Keep non-macOS ssh from choking on UseKeychain
+  IgnoreUnknown UseKeychain
+  # Keep idle connections alive
+  ServerAliveInterval 60

@@ -2,6 +2,18 @@
 export LC_ALL="en_US.UTF-8"
 export LANG="en_US.UTF-8"
 
-# Identity- and machine-specific config lives in ~/.extra (gitignored).
-# See .extra.example for the template.
-[ -r "$HOME/.extra" ] && source "$HOME/.extra"
+# vim everywhere
+export EDITOR="vim"
+export VISUAL="$EDITOR"
+
+# less: quit if it fits on one screen, pass through colors, don't clear
+# the screen on exit, and skip the ~/.lesshst history file
+export PAGER="less"
+export LESS="-FRX"
+export LESSHISTFILE="-"
+
+# ripgrep has no default config location; point it at ours
+export RIPGREP_CONFIG_PATH="$HOME/.ripgreprc"
+
+# Identity- and machine-specific config lives in ~/.extra (gitignored; see
+# .extra.example) — sourced from ~/.zshenv so non-interactive shells get it too.

@@ -1,5 +1,6 @@
 # application shortcuts
 alias chrome='open -a "Google Chrome"'
+alias code="/Applications/Visual\ Studio\ Code.app/Contents/Resources/app/bin/code"
 
 # Shortcuts
 alias g="git"

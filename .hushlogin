@@ -1,0 +1,2 @@
+# The mere presence of this file silences the "Last login: ..." banner
+# in new terminal sessions. Its contents are never read.
