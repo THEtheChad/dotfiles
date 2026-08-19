@@ -4,65 +4,316 @@
 # Interactive shells only — wt cd's you into the worktree, so it has to be
 # a function in your shell, not a script in ~/.local/bin.
 #
+# Every operation takes an explicit command. There is no bare `wt`.
+#
 # Usage:
-#   wt                    list worktrees
-#   wt feature-a          create (or reattach to) worktree, then launch claude
-#   wt feature-a --resume  extra args are passed through to claude
-#   wt rm feature-a       remove worktree and delete its branch
+#   wt list                worktrees with session id, status, description
+#   wt new [branch]        create worktree + session, launch claude
+#                          branch defaults to the next free wt/N
+#   wt resume <ref>        cd back into a worktree, resume its session
+#   wt rm <ref>            remove worktree and delete its branch
+#   wt help                this text
+#
+# <ref> is a session-id prefix (like a short sha), a branch name, or a
+# worktree directory name. Args after `new`/`resume` pass through to claude.
+#
+# Each worktree owns a Claude session id, minted here and handed to claude
+# via --session-id, so `wt resume` lands in the same conversation every time.
+# It lives in worktree-scoped git config (wt.sessionId), which keeps it out
+# of `git status` — see _wt_session.
 #
 # Env:
-#   WT_SAFE=1             launch with permission prompts enabled
-#   WT_NO_LAUNCH=1        set up the worktree and cd there, don't launch
-#   WT_DIR=<path>         where worktrees live (default: sibling of repo root)
+#   WT_SAFE=1              launch with permission prompts enabled
+#   WT_NO_LAUNCH=1         set up the worktree and cd there, don't launch
+#   WT_DIR=<path>          where worktrees live (default: sibling of repo root)
 
 wt() {
-  local root repo name dir branch
+  local cmd=$1 root
 
-  if [ "$1" = "rm" ]; then
-    shift
-    _wt_remove "$@"
-    return
-  fi
+  case "$cmd" in
+    help|-h|--help) _wt_usage; return 0 ;;
+    "") _wt_usage >&2; return 1 ;;
+  esac
+  shift
 
+  command -v git >/dev/null 2>&1 || {
+    echo "wt: git is not installed" >&2
+    return 1
+  }
+  # Guard here so every command inherits it — _wt_remove used to dispatch
+  # ahead of this check and fail silently outside a repo.
   root=$(_wt_root) || {
     echo "wt: not inside a git repository" >&2
     return 1
   }
-  repo=$(basename "$root")
 
-  if [ $# -eq 0 ]; then
-    git worktree list
-    return 0
-  fi
+  case "$cmd" in
+    list|ls)   _wt_list "$root" "$@" ;;
+    new)       _wt_new "$root" "$@" ;;
+    resume|cd) _wt_resume "$root" "$@" ;;
+    rm|remove) _wt_remove "$root" "$@" ;;
+    *) echo "wt: unknown command '$cmd' — try: wt help" >&2; return 1 ;;
+  esac
+}
 
-  branch=$1
-  shift
-  name=${branch//\//-}
-  dir=${WT_DIR:-$(dirname "$root")}/${repo}-${name}
+_wt_usage() {
+  cat <<'USAGE'
+usage: wt <command> [args]
 
-  if [ -d "$dir" ]; then
-    echo "wt: reattaching to $dir"
-  else
-    if git show-ref --verify --quiet "refs/heads/$branch"; then
-      git worktree add "$dir" "$branch" || return 1
-    else
-      git worktree add "$dir" -b "$branch" || return 1
-    fi
-    _wt_bootstrap "$root" "$dir"
-  fi
+  wt list                worktrees with session id, status, description
+  wt new [branch]        create worktree + session, launch claude
+                         branch defaults to the next free wt/N
+  wt resume <ref>        cd back into a worktree, resume its session
+  wt rm <ref>            remove worktree and delete its branch
+  wt help                this text
 
-  cd "$dir" || return 1
-  [ -n "$WT_NO_LAUNCH" ] && return 0
-  _wt_launch "$@"
+<ref> is a session-id prefix, a branch name, or a worktree directory name.
+Args after `new`/`resume` pass through to claude.
+USAGE
 }
 
 # Path of the MAIN worktree, even when called from inside a linked one.
 # rev-parse --show-toplevel would return the linked worktree instead, which
 # made names compound (repo-a -> repo-a-b) and broke `wt rm` from inside.
 # `worktree list` always reports the main worktree first.
+#
+# Bare repos are allowed: worktrees are the point of a bare checkout. We test
+# --git-dir rather than --is-inside-work-tree because the latter PRINTS false
+# in a bare repo while still EXITING 0, so the old check let bare repos through
+# by accident instead of on purpose.
 _wt_root() {
-  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
-  git worktree list --porcelain | head -1 | cut -d' ' -f2-
+  local first
+  git rev-parse --git-dir >/dev/null 2>&1 || return 1
+  first=$(git worktree list --porcelain 2>/dev/null | head -1 | cut -d' ' -f2-)
+  [ -n "$first" ] || return 1
+  printf '%s\n' "$first"
+}
+
+# Directory prefix for this repo's worktrees. Strips a bare repo's .git
+# suffix, which used to leak into names as repo.git-branch.
+_wt_prefix() {
+  local root=$1 repo
+  repo=$(basename "${root%.git}")
+  printf '%s\n' "${WT_DIR:-$(dirname "$root")}/${repo}"
+}
+
+_wt_uuid() {
+  local u
+  if command -v uuidgen >/dev/null 2>&1; then
+    u=$(uuidgen)
+  elif [ -r /proc/sys/kernel/random/uuid ]; then
+    u=$(cat /proc/sys/kernel/random/uuid)
+  else
+    echo "wt: no uuidgen found, cannot mint a session id" >&2
+    return 1
+  fi
+  printf '%s' "$u" | tr '[:upper:]' '[:lower:]'
+  echo
+}
+
+# Read/write the session id for a worktree. Worktree-scoped config needs
+# extensions.worktreeConfig on the repo; setting it is idempotent.
+_wt_session() {
+  local dir=$1 sid=$2
+  if [ -n "$sid" ]; then
+    git -C "$dir" config extensions.worktreeConfig true
+    git -C "$dir" config --worktree wt.sessionId "$sid"
+  else
+    git -C "$dir" config --worktree wt.sessionId 2>/dev/null
+  fi
+}
+
+# Where claude keeps a session's transcript: project dirs are the cwd with
+# / and . flattened to dashes.
+_wt_transcript() {
+  local slug
+  slug=$(printf '%s' "$1" | tr './' '--')
+  printf '%s\n' "$HOME/.claude/projects/$slug/$2.jsonl"
+}
+
+_wt_next_branch() {
+  local root=$1 prefix n=1
+  prefix=$(_wt_prefix "$root")
+  while git -C "$root" show-ref --verify --quiet "refs/heads/wt/$n" \
+     || [ -d "${prefix}-wt-$n" ]; do
+    n=$((n + 1))
+  done
+  printf 'wt/%s\n' "$n"
+}
+
+# Emit path<TAB>branch<TAB>sessionId for every worktree, main one first.
+_wt_scan() {
+  local root=$1 line wtpath branch
+  while IFS= read -r line; do
+    case "$line" in
+      worktree\ *) wtpath=${line#worktree }; branch= ;;
+      branch\ *)   branch=${line#branch refs/heads/} ;;
+      detached)    branch='(detached)' ;;
+      bare)        branch='(bare)' ;;
+      '')          [ -n "$wtpath" ] && _wt_scan_row "$wtpath" "$branch"; wtpath=; branch= ;;
+    esac
+  done < <(git -C "$root" worktree list --porcelain 2>/dev/null)
+  [ -n "$wtpath" ] && _wt_scan_row "$wtpath" "$branch"
+}
+
+_wt_scan_row() {
+  printf '%s\t%s\t%s\n' "$1" "${2:-?}" "$(_wt_session "$1")"
+}
+
+# sessionId<TAB>status<TAB>description for the given ids.
+#   status      from ~/.claude/sessions/<pid>.json (live sessions only)
+#   description first real prompt, from ~/.claude/history.jsonl
+# There is no summary stored anywhere in ~/.claude, so the opening prompt is
+# the best description available.
+_wt_meta() {
+  [ $# -eq 0 ] && return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  python3 - "$@" <<'PYEOF'
+import glob, json, os, sys
+
+want = set(sys.argv[1:])
+status, desc = {}, {}
+
+for f in glob.glob(os.path.expanduser("~/.claude/sessions/*.json")):
+    try:
+        d = json.load(open(f))
+    except Exception:
+        continue
+    if d.get("sessionId") in want:
+        status[d["sessionId"]] = d.get("status", "")
+
+hist = os.path.expanduser("~/.claude/history.jsonl")
+if os.path.exists(hist):
+    for line in open(hist, errors="replace"):
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        sid = d.get("sessionId")
+        if sid not in want or sid in desc:
+            continue
+        text = " ".join((d.get("display") or "").split())
+        if len(text) < 12 or text.startswith("/"):
+            continue          # slash commands and noise like "exit"
+        desc[sid] = text
+
+for sid in want:
+    print("%s\t%s\t%s" % (sid, status.get(sid, ""), desc.get(sid, "")))
+PYEOF
+}
+
+_wt_list() {
+  local root=$1 wtpath branch sid line sstat desc mark disp cols width i
+  local -a paths=() branches=() sids=()
+  local -A st=() ds=()
+
+  while IFS=$'\t' read -r wtpath branch sid; do
+    paths+=("$wtpath"); branches+=("$branch"); sids+=("$sid")
+  done < <(_wt_scan "$root")
+
+  while IFS=$'\t' read -r sid sstat desc; do
+    st[$sid]=$sstat; ds[$sid]=$desc
+  done < <(_wt_meta ${(u)sids:#})
+
+  cols=${COLUMNS:-100}
+  width=$((cols - 60))
+  [ $width -lt 20 ] && width=20
+
+  printf '  %-8s  %-14s  %-30s  %s\n' SESSION BRANCH PATH DESCRIPTION
+  for ((i = 1; i <= ${#paths[@]}; i++)); do
+    wtpath=${paths[$i]}; branch=${branches[$i]}; sid=${sids[$i]}
+    disp=${wtpath/#$HOME/\~}
+    [ ${#disp} -gt 30 ] && disp="…${disp: -29}"
+    [ "$wtpath" = "$root" ] && desc='(main worktree)' || desc=${ds[$sid]:-}
+    mark=' '
+    case ${st[$sid]:-} in
+      busy) mark='*' ;;
+      idle|waiting) mark='.' ;;
+    esac
+    printf '%s %-8s  %-14s  %-30s  %.*s\n' \
+      "$mark" "${sid:0:8}" "${branch:0:14}" "$disp" "$width" "$desc"
+  done
+  [ ${#paths[@]} -le 1 ] && echo "\nno linked worktrees — create one with: wt new"
+  return 0
+}
+
+_wt_new() {
+  local root=$1; shift
+  local branch=$1 name dir sid
+  [ $# -gt 0 ] && shift
+  [ -z "$branch" ] && branch=$(_wt_next_branch "$root")
+
+  name=${branch//\//-}
+  dir=$(_wt_prefix "$root")-${name}
+
+  [ -e "$dir" ] && {
+    echo "wt: $dir already exists — use: wt resume $branch" >&2
+    return 1
+  }
+
+  if git -C "$root" show-ref --verify --quiet "refs/heads/$branch"; then
+    git -C "$root" worktree add "$dir" "$branch" || return 1
+  else
+    git -C "$root" worktree add "$dir" -b "$branch" || return 1
+  fi
+
+  sid=$(_wt_uuid) || return 1
+  _wt_session "$dir" "$sid"
+  _wt_bootstrap "$root" "$dir"
+
+  cd "$dir" || return 1
+  echo "wt: branch $branch, session ${sid:0:8}"
+  [ -n "$WT_NO_LAUNCH" ] && return 0
+  _wt_launch --session-id "$sid" "$@"
+}
+
+_wt_resume() {
+  local root=$1; shift
+  local ref=$1 dir sid
+  [ -z "$ref" ] && {
+    echo "wt resume: need a session id, branch, or worktree name" >&2
+    return 1
+  }
+  shift
+  dir=$(_wt_resolve "$root" "$ref") || return 1
+  sid=$(_wt_session "$dir")
+
+  cd "$dir" || return 1
+  [ -n "$WT_NO_LAUNCH" ] && return 0
+
+  # --session-id creates, --resume reattaches. Only reattach once claude has
+  # actually written a transcript, or it errors on an unknown session.
+  if [ -z "$sid" ]; then
+    echo "wt: no session recorded here, starting a fresh one" >&2
+    sid=$(_wt_uuid) && _wt_session "$dir" "$sid" && _wt_launch --session-id "$sid" "$@"
+  elif [ -f "$(_wt_transcript "$dir" "$sid")" ]; then
+    _wt_launch --resume "$sid" "$@"
+  else
+    _wt_launch --session-id "$sid" "$@"
+  fi
+}
+
+# Resolve a session-id prefix, branch name, or worktree dir name to a path.
+# The main worktree is never a candidate — it isn't ours to resume or remove.
+_wt_resolve() {
+  local root=$1 ref=$2 wtpath branch sid
+  local -a hits=()
+  while IFS=$'\t' read -r wtpath branch sid; do
+    [ "$wtpath" = "$root" ] && continue
+    if [ -n "$sid" ] && [ "${sid#$ref}" != "$sid" ]; then
+      hits+=("$wtpath")
+    elif [ "$branch" = "$ref" ] || [ "$(basename "$wtpath")" = "$ref" ]; then
+      hits+=("$wtpath")
+    fi
+  done < <(_wt_scan "$root")
+
+  case ${#hits[@]} in
+    1) printf '%s\n' "${hits[1]}" ;;
+    0) echo "wt: no worktree matching '$ref'" >&2; return 1 ;;
+    *) echo "wt: '$ref' is ambiguous:" >&2
+       printf '  %s\n' "${hits[@]}" >&2
+       return 1 ;;
+  esac
 }
 
 # Copy the ignored files a fresh worktree needs, then install deps.
@@ -94,21 +345,24 @@ _wt_launch() {
 }
 
 _wt_remove() {
-  local root repo name dir branch
-  root=$(_wt_root) || return 1
-  repo=$(basename "$root")
-  branch=$1
-  [ -z "$branch" ] && { echo "wt rm: need a name" >&2; return 1; }
-  name=${branch//\//-}
-  dir=${WT_DIR:-$(dirname "$root")}/${repo}-${name}
+  local root=$1 ref=$2 dir branch
+  [ -z "$ref" ] && {
+    echo "wt rm: need a session id, branch, or worktree name" >&2
+    return 1
+  }
+  dir=$(_wt_resolve "$root" "$ref") || return 1
+  # Read the branch before the worktree goes away.
+  branch=$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null)
 
   # Don't delete the tree you're standing in.
   case "$PWD" in "$dir"*) cd "$root" || return 1 ;; esac
 
-  git worktree remove "$dir" || {
-    echo "wt: uncommitted changes in $dir — use: git worktree remove --force '$dir'" >&2
+  git -C "$root" worktree remove "$dir" || {
+    echo "wt: uncommitted changes in $dir — use: git -C '$root' worktree remove --force '$dir'" >&2
     return 1
   }
-  git branch -d "$branch" 2>/dev/null || \
-    echo "wt: branch '$branch' not fully merged, kept. Delete with: git branch -D '$branch'"
+  [ -n "$branch" ] && [ "$branch" != HEAD ] && {
+    git -C "$root" branch -d "$branch" 2>/dev/null || \
+      echo "wt: branch '$branch' not fully merged, kept. Delete with: git branch -D '$branch'"
+  }
 }
