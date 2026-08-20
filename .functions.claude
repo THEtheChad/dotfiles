@@ -282,10 +282,10 @@ _wt_new() {
   sid=$(_wt_uuid) || return 1
   _wt_session "$dir" "$sid"
   _wt_base "$dir" "$(git -C "$dir" rev-parse HEAD 2>/dev/null)"
-  _wt_bootstrap "$root" "$dir"
 
   cd "$dir" || return 1
   echo "wt: branch $branch, session ${sid:0:8}"
+  _wt_report_ignored "$root" "$dir"
   [ -n "$WT_NO_LAUNCH" ] && return 0
   _wt_launch --session-id "$sid" "$@"
   _wt_finish "$root" "$dir" "$origin"
@@ -303,6 +303,7 @@ _wt_resume() {
   sid=$(_wt_session "$dir")
 
   cd "$dir" || return 1
+  _wt_report_ignored "$root" "$dir"
   [ -n "$WT_NO_LAUNCH" ] && return 0
 
   # --session-id creates, --resume reattaches. Only reattach once claude has
@@ -341,23 +342,52 @@ _wt_resolve() {
   esac
 }
 
-# Copy the ignored files a fresh worktree needs, then install deps.
-# Add project-specific paths to the `for f in` list as you hit them.
-_wt_bootstrap() {
-  local src=$1 dst=$2 f
-  for f in .env .env.local .envrc .tool-versions; do
-    [ -f "$src/$f" ] && cp "$src/$f" "$dst/$f"
-  done
+# Report the gitignored paths that exist in the source checkout but are absent
+# from $dst. Copies nothing and installs nothing: git carries only tracked
+# files, so this is an honest inventory of what is missing — deps, .env, sample
+# data — letting the session be asked for whatever it actually needs.
+#
+# Runs on both `wt new` and `wt resume`. Because it tests the destination for
+# each path rather than assuming a bare checkout, a resume only reports what is
+# STILL missing: anything an earlier session reconciled drops off the list.
+#
+# Sizes come from du so bulk (a 245M .venv) is distinguishable from a 300B
+# .env at a glance. Set WT_IGNORED_LIMIT to change how many paths are listed;
+# the count is always the true total.
+_wt_report_ignored() {
+  local src=$1 dst=$2 entry bare size shown=0 total=0
+  local limit=${WT_IGNORED_LIMIT:-20}
+  local -a lines
 
-  ( cd "$dst" || exit
-    if   [ -f pnpm-lock.yaml ];     then pnpm install --prefer-offline
-    elif [ -f yarn.lock ];          then yarn install
-    elif [ -f package-lock.json ];  then npm ci
-    elif [ -f uv.lock ];            then uv sync
-    elif [ -f requirements.txt ];   then
-      python3 -m venv .venv && .venv/bin/pip install -qr requirements.txt
-    fi
-  )
+  while IFS= read -r entry; do
+    bare=${entry%/}
+    case "$entry" in
+      */)
+        # --directory also collapses dirs that are merely untracked (every file
+        # inside happens to be ignored). git lists those files individually, so
+        # reporting the dir too would double-count — only report dirs an ignore
+        # RULE actually matches.
+        git -C "$src" check-ignore -q "$entry" || continue ;;
+    esac
+
+    [ -e "$dst/$bare" ] && continue
+    total=$((total + 1))
+    [ "$shown" -ge "$limit" ] && continue
+    size=$(du -sh "$src/$bare" 2>/dev/null | cut -f1)
+    lines+=("$(printf '%7s  %s' "${size:-?}" "$entry")")
+    shown=$((shown + 1))
+  done < <(git -C "$src" -c core.quotePath=false ls-files \
+             --others --ignored --exclude-standard --directory)
+
+  [ "$total" -eq 0 ] && return 0
+
+  {
+    echo "wt: $total gitignored path(s) exist in $src but NOT here:"
+    [ ${#lines[@]} -gt 0 ] && printf '       %s\n' "${lines[@]}"
+    [ "$total" -gt "$shown" ] && echo "       … and $((total - shown)) more"
+    echo "wt: nothing was copied — ask the session to set up what it needs."
+  } >&2
+  return 0
 }
 
 _wt_launch() {
