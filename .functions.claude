@@ -7,15 +7,29 @@
 # Every operation takes an explicit command. There is no bare `wt`.
 #
 # Usage:
-#   wt list                worktrees with session id, status, description
-#   wt new [branch]        create worktree + session, launch claude
-#                          branch defaults to the next free wt/N
-#   wt resume <ref>        cd back into a worktree, resume its session
-#   wt rm <ref>            remove worktree and delete its branch
-#   wt help                this text
+#   wt list                             worktrees with session id, status, description
+#   wt new [flags] [branch] [-- args]   create worktree + session, launch claude
+#                                       branch defaults to the next free wt/N
+#   wt resume [flags] <ref> [-- args]   cd back into a worktree, resume its session
+#   wt rm <ref>                         remove worktree and delete its branch
+#   wt help                             this text
 #
 # <ref> is a session-id prefix (like a short sha), a branch name, or a
-# worktree directory name. Args after `new`/`resume` pass through to claude.
+# worktree directory name.
+#
+# Flags, on `new` and `resume`:
+#   --safe-mode            launch with permission prompts enabled
+#   --no-launch            set up the worktree and cd there, don't launch
+#   --keep-worktree        skip the on-exit prompt, always keep the worktree
+#   --max-ignored <n>      cap the missing-gitignored-paths list (default 20)
+#
+# Flags, on `new` only:
+#   --worktree-dir <path>  worktree root (default: ~/.worktrees)
+#
+# wt owns every argument up to `--`; claude owns everything after it. The
+# separator is required, so a flag wt doesn't know is an error rather than a
+# confusing one from claude:
+#   wt new --safe-mode wt/9 -- --model opus
 #
 # Worktrees live under ~/.worktrees/<repo>/<name>, not beside the repo, so
 # your project directory only ever holds real checkouts. When claude exits,
@@ -27,21 +41,27 @@
 # via --session-id, so `wt resume` lands in the same conversation every time.
 # It lives in worktree-scoped git config (wt.sessionId), which keeps it out
 # of `git status` — see _wt_session.
-#
-# Env:
-#   WT_SAFE=1              launch with permission prompts enabled
-#   WT_NO_LAUNCH=1         set up the worktree and cd there, don't launch
-#   WT_DIR=<path>          worktree root (default: ~/.worktrees)
-#   WT_KEEP=1              skip the on-exit prompt, always keep the worktree
 
+# Flags are parsed once, here, for every command, and land in locals that
+# zsh's dynamic scoping makes visible to every _wt_* helper called below.
+# Locals rather than globals on purpose: nothing survives the call, so one
+# invocation can't inherit a stale --keep-worktree from the last one.
 wt() {
   local cmd=$1 root
+  local wt_safe= wt_no_launch= wt_keep= wt_worktree_dir=
+  local wt_max_ignored=20
+  local -a wt_pos=() wt_claude=()
 
   case "$cmd" in
     help|-h|--help) _wt_usage; return 0 ;;
     "") _wt_usage >&2; return 1 ;;
+    list|ls|new|resume|cd|rm|remove) ;;
+    *) echo "wt: unknown command '$cmd' — try: wt help" >&2; return 1 ;;
   esac
   shift
+
+  # Parse and range-check before touching git, so a typo costs nothing.
+  _wt_parse "$cmd" "$@" || return 1
 
   command -v git >/dev/null 2>&1 || {
     echo "wt: git is not installed" >&2
@@ -55,27 +75,138 @@ wt() {
   }
 
   case "$cmd" in
-    list|ls)   _wt_list "$root" "$@" ;;
-    new)       _wt_new "$root" "$@" ;;
-    resume|cd) _wt_resume "$root" "$@" ;;
-    rm|remove) _wt_remove "$root" "$@" ;;
-    *) echo "wt: unknown command '$cmd' — try: wt help" >&2; return 1 ;;
+    list|ls)   _wt_list "$root" ;;
+    new)       _wt_new "$root" ;;
+    resume|cd) _wt_resume "$root" ;;
+    rm|remove) _wt_remove "$root" ;;
   esac
+}
+
+# The flags each command accepts, plus `--` for the ones that launch claude,
+# and the positional count it allows as min:max. Listing them per command
+# rather than accepting everything everywhere means `wt list --safe-mode`
+# says so instead of quietly doing nothing.
+_wt_spec() {
+  case "$1" in
+    list|ls)   printf '%s\n' '' '0:0' ;;
+    new)       printf '%s\n' '--safe-mode --no-launch --keep-worktree --max-ignored --worktree-dir --' '0:1' ;;
+    resume|cd) printf '%s\n' '--safe-mode --no-launch --keep-worktree --max-ignored --' '1:1' ;;
+    rm|remove) printf '%s\n' '' '1:1' ;;
+  esac
+}
+
+# Fills wt_pos, wt_claude and the wt_* flag locals declared in wt().
+_wt_parse() {
+  local cmd=$1; shift
+  local allowed counts min max arg name val
+
+  { read -r allowed; read -r counts; } < <(_wt_spec "$cmd")
+  min=${counts%%:*}; max=${counts##*:}
+
+  while [ $# -gt 0 ]; do
+    arg=$1
+    case "$arg" in
+      --)
+        case " $allowed " in
+          *' -- '*) shift; wt_claude=("$@"); break ;;
+          *) echo "wt $cmd: '$cmd' does not launch claude, so it takes no '--' arguments" >&2
+             return 1 ;;
+        esac ;;
+      --*=*) name=${arg%%=*}; val=${arg#*=} ;;
+      -*)    name=$arg; val= ;;
+      *)     wt_pos+=("$arg"); shift; continue ;;
+    esac
+
+    case " $allowed " in
+      *" $name "*) ;;
+      *) _wt_unknown_flag "$cmd" "$arg" "$allowed"; return 1 ;;
+    esac
+
+    case "$name" in
+      --safe-mode)     wt_safe=1 ;;
+      --no-launch)     wt_no_launch=1 ;;
+      --keep-worktree) wt_keep=1 ;;
+      --worktree-dir|--max-ignored)
+        # `--flag value` and `--flag=value` both work; a bare `--flag=` is a
+        # mistake, not an empty value.
+        if [ "$arg" = "$name" ]; then
+          [ $# -ge 2 ] || { echo "wt $cmd: $name needs a value" >&2; return 1; }
+          val=$2; shift
+        fi
+        [ -n "$val" ] || { echo "wt $cmd: $name needs a value" >&2; return 1; }
+        case "$name" in
+          --max-ignored)
+            case "$val" in
+              *[!0-9]*) echo "wt $cmd: --max-ignored needs a whole number, got '$val'" >&2
+                        return 1 ;;
+            esac
+            wt_max_ignored=$val ;;
+          --worktree-dir) wt_worktree_dir=$val ;;
+        esac ;;
+    esac
+    shift
+  done
+
+  if [ ${#wt_pos[@]} -lt "$min" ] || [ ${#wt_pos[@]} -gt "$max" ]; then
+    _wt_bad_positionals "$cmd" "$min" "$max"
+    return 1
+  fi
+  return 0
+}
+
+# The hint matters more than the error: the whole point of requiring `--` is
+# that a claude flag typed in wt's half gets told exactly where it belongs.
+_wt_unknown_flag() {
+  local cmd=$1 arg=$2 allowed=$3 example="wt $cmd"
+  echo "wt $cmd: unknown flag '$arg'" >&2
+  case " $allowed " in
+    *' -- '*)
+      [ -n "${wt_pos[1]:-}" ] && example="$example ${wt_pos[1]}"
+      echo "       pass claude args after --, e.g. $example -- $arg" >&2
+      echo "       flags wt accepts here: ${allowed% --}" >&2 ;;
+    *) echo "       wt $cmd takes no flags — try: wt help" >&2 ;;
+  esac
+}
+
+_wt_bad_positionals() {
+  local cmd=$1 min=$2 max=$3
+  case "$cmd" in
+    list|ls)   echo "wt $cmd: takes no arguments" >&2 ;;
+    new)       echo "wt new: takes at most one branch name, got ${#wt_pos[@]}" >&2 ;;
+    resume|cd) [ "${#wt_pos[@]}" -eq 0 ] \
+                 && echo "wt resume: need a session id, branch, or worktree name" >&2 \
+                 || echo "wt resume: takes exactly one ref, got ${#wt_pos[@]}" >&2 ;;
+    rm|remove) [ "${#wt_pos[@]}" -eq 0 ] \
+                 && echo "wt rm: need a session id, branch, or worktree name" >&2 \
+                 || echo "wt rm: takes exactly one ref, got ${#wt_pos[@]}" >&2 ;;
+  esac
+  echo "       try: wt help" >&2
 }
 
 _wt_usage() {
   cat <<'USAGE'
-usage: wt <command> [args]
+usage: wt <command> [flags] [args] [-- claude args]
 
-  wt list                worktrees with session id, status, description
-  wt new [branch]        create worktree + session, launch claude
-                         branch defaults to the next free wt/N
-  wt resume <ref>        cd back into a worktree, resume its session
-  wt rm <ref>            remove worktree and delete its branch
-  wt help                this text
+  wt list                             worktrees with session id, status, description
+  wt new [flags] [branch] [-- args]   create worktree + session, launch claude
+                                      branch defaults to the next free wt/N
+  wt resume [flags] <ref> [-- args]   cd back into a worktree, resume its session
+  wt rm <ref>                         remove worktree and delete its branch
+  wt help                             this text
+
+flags for new and resume:
+  --safe-mode            launch with permission prompts enabled
+  --no-launch            set up the worktree and cd there, don't launch
+  --keep-worktree        skip the on-exit prompt, always keep the worktree
+  --max-ignored <n>      cap the missing-gitignored-paths list (default 20)
+
+flags for new:
+  --worktree-dir <path>  worktree root (default: ~/.worktrees)
 
 <ref> is a session-id prefix, a branch name, or a worktree directory name.
-Args after `new`/`resume` pass through to claude.
+Everything after `--` is handed to claude verbatim:
+
+  wt new --safe-mode wt/9 -- --model opus
 
 Worktrees live under ~/.worktrees/<repo>/. On exit you're asked whether to
 keep the worktree, then returned to the directory you started from.
@@ -103,10 +234,14 @@ _wt_root() {
 # on purpose: siblings named repo-wt-1 clutter every `ls` and outlive the
 # session that made them. Strips a bare repo's .git suffix, which used to
 # leak into names as repo.git-branch.
+#
+# --worktree-dir overrides the root. Only `wt new` honours it: resume and rm
+# find worktrees through `git worktree list`, which reports real paths, so
+# they work on a tree wherever --worktree-dir put it.
 _wt_home() {
   local root=$1 repo
   repo=$(basename "${root%.git}")
-  printf '%s\n' "${WT_DIR:-$HOME/.worktrees}/${repo}"
+  printf '%s\n' "${wt_worktree_dir:-$HOME/.worktrees}/${repo}"
 }
 
 _wt_uuid() {
@@ -258,9 +393,8 @@ _wt_list() {
 }
 
 _wt_new() {
-  local root=$1; shift
-  local branch=$1 name dir sid home origin=$PWD
-  [ $# -gt 0 ] && shift
+  local root=$1
+  local branch=${wt_pos[1]:-} name dir sid home origin=$PWD
   [ -z "$branch" ] && branch=$(_wt_next_branch "$root")
 
   name=${branch//\//-}
@@ -286,35 +420,31 @@ _wt_new() {
   cd "$dir" || return 1
   echo "wt: branch $branch, session ${sid:0:8}"
   _wt_report_ignored "$root" "$dir"
-  [ -n "$WT_NO_LAUNCH" ] && return 0
-  _wt_launch --session-id "$sid" "$@"
+  [ -n "$wt_no_launch" ] && return 0
+  _wt_launch --session-id "$sid" "${wt_claude[@]}"
   _wt_finish "$root" "$dir" "$origin"
 }
 
 _wt_resume() {
-  local root=$1; shift
-  local ref=$1 dir sid origin=$PWD
-  [ -z "$ref" ] && {
-    echo "wt resume: need a session id, branch, or worktree name" >&2
-    return 1
-  }
-  shift
+  local root=$1
+  local ref=${wt_pos[1]} dir sid origin=$PWD
   dir=$(_wt_resolve "$root" "$ref") || return 1
   sid=$(_wt_session "$dir")
 
   cd "$dir" || return 1
   _wt_report_ignored "$root" "$dir"
-  [ -n "$WT_NO_LAUNCH" ] && return 0
+  [ -n "$wt_no_launch" ] && return 0
 
   # --session-id creates, --resume reattaches. Only reattach once claude has
   # actually written a transcript, or it errors on an unknown session.
   if [ -z "$sid" ]; then
     echo "wt: no session recorded here, starting a fresh one" >&2
-    sid=$(_wt_uuid) && _wt_session "$dir" "$sid" && _wt_launch --session-id "$sid" "$@"
+    sid=$(_wt_uuid) && _wt_session "$dir" "$sid" \
+      && _wt_launch --session-id "$sid" "${wt_claude[@]}"
   elif [ -f "$(_wt_transcript "$dir" "$sid")" ]; then
-    _wt_launch --resume "$sid" "$@"
+    _wt_launch --resume "$sid" "${wt_claude[@]}"
   else
-    _wt_launch --session-id "$sid" "$@"
+    _wt_launch --session-id "$sid" "${wt_claude[@]}"
   fi
   _wt_finish "$root" "$dir" "$origin"
 }
@@ -352,11 +482,11 @@ _wt_resolve() {
 # STILL missing: anything an earlier session reconciled drops off the list.
 #
 # Sizes come from du so bulk (a 245M .venv) is distinguishable from a 300B
-# .env at a glance. Set WT_IGNORED_LIMIT to change how many paths are listed;
-# the count is always the true total.
+# .env at a glance. --max-ignored changes how many paths are listed; the
+# count is always the true total.
 _wt_report_ignored() {
   local src=$1 dst=$2 entry bare size shown=0 total=0
-  local limit=${WT_IGNORED_LIMIT:-20}
+  local limit=${wt_max_ignored:-20}
   local -a lines
 
   while IFS= read -r entry; do
@@ -394,17 +524,13 @@ _wt_launch() {
   local -a cmd=()
   command -v caffeinate >/dev/null 2>&1 && cmd=(caffeinate -dims)
   cmd+=(claude)
-  [ -z "$WT_SAFE" ] && cmd+=(--dangerously-skip-permissions)
+  [ -z "$wt_safe" ] && cmd+=(--dangerously-skip-permissions)
   echo "wt: ${cmd[*]} $*"
   "${cmd[@]}" "$@"
 }
 
 _wt_remove() {
-  local root=$1 ref=$2 dir
-  [ -z "$ref" ] && {
-    echo "wt rm: need a session id, branch, or worktree name" >&2
-    return 1
-  }
+  local root=$1 ref=${wt_pos[1]} dir
   dir=$(_wt_resolve "$root" "$ref") || return 1
   _wt_destroy "$root" "$dir"
 }
@@ -451,7 +577,7 @@ _wt_finish() {
 
   branch=$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null)
   sid=$(_wt_session "$dir")
-  [ -n "$WT_KEEP" ] && { _wt_kept "$dir" "$sid" "$branch"; return 0; }
+  [ -n "$wt_keep" ] && { _wt_kept "$dir" "$sid" "$branch"; return 0; }
 
   dirty=$(git -C "$dir" status --porcelain 2>/dev/null | grep -c .)
   base=$(_wt_base "$dir")
