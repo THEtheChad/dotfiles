@@ -40,12 +40,15 @@ wt help
 directory name. With no branch, `wt new` picks the next free `wt/N`. Args after
 `new`/`resume` pass through to `claude`.
 
+Worktrees live under `~/.worktrees/<repo>/<branch>`, not beside the repo, so
+your project directory only ever holds real checkouts.
+
 ```
 $ wt list
   SESSION   BRANCH          PATH                            DESCRIPTION
             main            ~/Projects/dotfiles             (main worktree)
-* 4f21a8c3  wt/1            ~/Projects/dotfiles-wt-1        rework wt list with session ids
-  b5fb2fdf  feature/x       ~/Projects/dotfiles-feature-x   add the ingress shim
+* 4f21a8c3  wt/1            ~/.worktrees/dotfiles/wt-1      rework wt list with session ids
+  b5fb2fdf  feature/x       ~/.worktrees/dotfiles/feature-x add the ingress shim
 
 $ wt resume 4f21
 ```
@@ -55,11 +58,36 @@ $ wt resume 4f21
 session's first real prompt, read from `~/.claude/history.jsonl`; Claude Code
 does not store a summary anywhere, so that is the best available label.
 
+### On exit
+
+When `claude` exits, `wt` asks whether to keep the worktree and then returns
+you to the directory you started from — a session never strands you in a tree
+you did not choose to be in.
+
+```
+$ wt new                                  # from ~/Projects/dotfiles
+…
+wt: wt/3 has nothing to keep — remove it? [Y/n]
+$ pwd
+/Users/you/Projects/dotfiles
+```
+
+A worktree with commits or uncommitted files says so and defaults to keeping:
+
+```
+wt: wt/3 has 2 commit(s), 1 uncommitted file(s) — remove it anyway? [y/N]
+```
+
+Answering `y` there forces the worktree away but leaves the branch, since
+`git branch -d` refuses unmerged work — committed work survives either way.
+Non-interactive shells are never prompted and always keep the worktree.
+
 | Env | Effect |
 |---|---|
 | `WT_SAFE=1` | launch with permission prompts enabled |
 | `WT_NO_LAUNCH=1` | set up the worktree and `cd` there, don't launch |
-| `WT_DIR=<path>` | where worktrees live (default: sibling of repo root) |
+| `WT_DIR=<path>` | worktree root (default: `~/.worktrees`) |
+| `WT_KEEP=1` | skip the on-exit prompt, always keep the worktree |
 
 ## Layout
 

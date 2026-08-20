@@ -17,6 +17,12 @@
 # <ref> is a session-id prefix (like a short sha), a branch name, or a
 # worktree directory name. Args after `new`/`resume` pass through to claude.
 #
+# Worktrees live under ~/.worktrees/<repo>/<name>, not beside the repo, so
+# your project directory only ever holds real checkouts. When claude exits,
+# `new` and `resume` ask whether to keep the worktree and then put you back
+# in the directory you started from — a session never strands you somewhere
+# you didn't choose to be.
+#
 # Each worktree owns a Claude session id, minted here and handed to claude
 # via --session-id, so `wt resume` lands in the same conversation every time.
 # It lives in worktree-scoped git config (wt.sessionId), which keeps it out
@@ -25,7 +31,8 @@
 # Env:
 #   WT_SAFE=1              launch with permission prompts enabled
 #   WT_NO_LAUNCH=1         set up the worktree and cd there, don't launch
-#   WT_DIR=<path>          where worktrees live (default: sibling of repo root)
+#   WT_DIR=<path>          worktree root (default: ~/.worktrees)
+#   WT_KEEP=1              skip the on-exit prompt, always keep the worktree
 
 wt() {
   local cmd=$1 root
@@ -69,6 +76,9 @@ usage: wt <command> [args]
 
 <ref> is a session-id prefix, a branch name, or a worktree directory name.
 Args after `new`/`resume` pass through to claude.
+
+Worktrees live under ~/.worktrees/<repo>/. On exit you're asked whether to
+keep the worktree, then returned to the directory you started from.
 USAGE
 }
 
@@ -89,12 +99,14 @@ _wt_root() {
   printf '%s\n' "$first"
 }
 
-# Directory prefix for this repo's worktrees. Strips a bare repo's .git
-# suffix, which used to leak into names as repo.git-branch.
-_wt_prefix() {
+# Directory holding this repo's worktrees. Kept out of the project directory
+# on purpose: siblings named repo-wt-1 clutter every `ls` and outlive the
+# session that made them. Strips a bare repo's .git suffix, which used to
+# leak into names as repo.git-branch.
+_wt_home() {
   local root=$1 repo
   repo=$(basename "${root%.git}")
-  printf '%s\n' "${WT_DIR:-$(dirname "$root")}/${repo}"
+  printf '%s\n' "${WT_DIR:-$HOME/.worktrees}/${repo}"
 }
 
 _wt_uuid() {
@@ -111,17 +123,25 @@ _wt_uuid() {
   echo
 }
 
-# Read/write the session id for a worktree. Worktree-scoped config needs
+# Read/write a worktree-scoped setting. Worktree-scoped config needs
 # extensions.worktreeConfig on the repo; setting it is idempotent.
-_wt_session() {
-  local dir=$1 sid=$2
-  if [ -n "$sid" ]; then
+_wt_cfg() {
+  local dir=$1 key=$2 val=$3
+  if [ -n "$val" ]; then
     git -C "$dir" config extensions.worktreeConfig true
-    git -C "$dir" config --worktree wt.sessionId "$sid"
+    git -C "$dir" config --worktree "$key" "$val"
   else
-    git -C "$dir" config --worktree wt.sessionId 2>/dev/null
+    git -C "$dir" config --worktree "$key" 2>/dev/null
   fi
 }
+
+# The Claude session this worktree owns.
+_wt_session() { _wt_cfg "$1" wt.sessionId "$2"; }
+
+# The commit the worktree branched from, so the exit prompt can say how much
+# work would go with it. Recorded at creation because the main worktree's
+# HEAD moves underneath us.
+_wt_base() { _wt_cfg "$1" wt.base "$2"; }
 
 # Where claude keeps a session's transcript: project dirs are the cwd with
 # / and . flattened to dashes.
@@ -132,10 +152,10 @@ _wt_transcript() {
 }
 
 _wt_next_branch() {
-  local root=$1 prefix n=1
-  prefix=$(_wt_prefix "$root")
+  local root=$1 home n=1
+  home=$(_wt_home "$root")
   while git -C "$root" show-ref --verify --quiet "refs/heads/wt/$n" \
-     || [ -d "${prefix}-wt-$n" ]; do
+     || [ -d "$home/wt-$n" ]; do
     n=$((n + 1))
   done
   printf 'wt/%s\n' "$n"
@@ -239,17 +259,19 @@ _wt_list() {
 
 _wt_new() {
   local root=$1; shift
-  local branch=$1 name dir sid
+  local branch=$1 name dir sid home origin=$PWD
   [ $# -gt 0 ] && shift
   [ -z "$branch" ] && branch=$(_wt_next_branch "$root")
 
   name=${branch//\//-}
-  dir=$(_wt_prefix "$root")-${name}
+  home=$(_wt_home "$root")
+  dir=$home/$name
 
   [ -e "$dir" ] && {
     echo "wt: $dir already exists — use: wt resume $branch" >&2
     return 1
   }
+  mkdir -p "$home" || return 1
 
   if git -C "$root" show-ref --verify --quiet "refs/heads/$branch"; then
     git -C "$root" worktree add "$dir" "$branch" || return 1
@@ -259,17 +281,19 @@ _wt_new() {
 
   sid=$(_wt_uuid) || return 1
   _wt_session "$dir" "$sid"
+  _wt_base "$dir" "$(git -C "$dir" rev-parse HEAD 2>/dev/null)"
   _wt_bootstrap "$root" "$dir"
 
   cd "$dir" || return 1
   echo "wt: branch $branch, session ${sid:0:8}"
   [ -n "$WT_NO_LAUNCH" ] && return 0
   _wt_launch --session-id "$sid" "$@"
+  _wt_finish "$root" "$dir" "$origin"
 }
 
 _wt_resume() {
   local root=$1; shift
-  local ref=$1 dir sid
+  local ref=$1 dir sid origin=$PWD
   [ -z "$ref" ] && {
     echo "wt resume: need a session id, branch, or worktree name" >&2
     return 1
@@ -291,6 +315,7 @@ _wt_resume() {
   else
     _wt_launch --session-id "$sid" "$@"
   fi
+  _wt_finish "$root" "$dir" "$origin"
 }
 
 # Resolve a session-id prefix, branch name, or worktree dir name to a path.
@@ -345,19 +370,31 @@ _wt_launch() {
 }
 
 _wt_remove() {
-  local root=$1 ref=$2 dir branch
+  local root=$1 ref=$2 dir
   [ -z "$ref" ] && {
     echo "wt rm: need a session id, branch, or worktree name" >&2
     return 1
   }
   dir=$(_wt_resolve "$root" "$ref") || return 1
+  _wt_destroy "$root" "$dir"
+}
+
+# Tear down a worktree by path. Split out of _wt_remove so _wt_finish can
+# reuse it without round-tripping through _wt_resolve, which matches on
+# names the caller has already resolved past.
+#
+# The branch outlives a forced removal on purpose: `branch -d` refuses
+# unmerged work, so committed work survives even when you asked to drop the
+# tree in a hurry.
+_wt_destroy() {
+  local root=$1 dir=$2 force=$3 branch
   # Read the branch before the worktree goes away.
   branch=$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null)
 
   # Don't delete the tree you're standing in.
-  case "$PWD" in "$dir"*) cd "$root" || return 1 ;; esac
+  case "$PWD" in "$dir"|"$dir"/*) cd "$root" || return 1 ;; esac
 
-  git -C "$root" worktree remove "$dir" || {
+  git -C "$root" worktree remove ${force:+--force} "$dir" || {
     echo "wt: uncommitted changes in $dir — use: git -C '$root' worktree remove --force '$dir'" >&2
     return 1
   }
@@ -365,4 +402,56 @@ _wt_remove() {
     git -C "$root" branch -d "$branch" 2>/dev/null || \
       echo "wt: branch '$branch' not fully merged, kept. Delete with: git branch -D '$branch'"
   }
+}
+
+# Called once claude exits. Offers to drop the worktree, then returns you to
+# the directory you ran `wt` from. Landing back where you started is the
+# point: you asked for a session, not for a new home.
+#
+# We cd out FIRST so the prompt is answered from solid ground and a removal
+# can't pull the floor out from under the shell.
+_wt_finish() {
+  local root=$1 dir=$2 origin=$3 branch sid base dirty ahead summary reply
+
+  case "$origin" in "$dir"|"$dir"/*) origin=$root ;; esac
+  [ -d "$origin" ] || origin=$root
+  cd "$origin" 2>/dev/null || cd "$root" || return 1
+
+  [ -d "$dir" ] || return 0
+
+  branch=$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null)
+  sid=$(_wt_session "$dir")
+  [ -n "$WT_KEEP" ] && { _wt_kept "$dir" "$sid" "$branch"; return 0; }
+
+  dirty=$(git -C "$dir" status --porcelain 2>/dev/null | grep -c .)
+  base=$(_wt_base "$dir")
+  [ -z "$base" ] && base=$(git -C "$root" rev-parse HEAD 2>/dev/null)
+  ahead=$(git -C "$dir" rev-list --count "$base"..HEAD 2>/dev/null) || ahead=0
+
+  summary=
+  [ "${ahead:-0}" -gt 0 ] && summary="$ahead commit(s)"
+  [ "${dirty:-0}" -gt 0 ] && summary="${summary:+$summary, }$dirty uncommitted file(s)"
+
+  # Non-interactive shells never get to answer, so they never lose anything.
+  [ -t 0 ] || { _wt_kept "$dir" "$sid" "$branch"; return 0; }
+
+  if [ -z "$summary" ]; then
+    read -r "reply?wt: $branch has nothing to keep — remove it? [Y/n] "
+    case "$reply" in [Nn]*) _wt_kept "$dir" "$sid" "$branch"; return 0 ;; esac
+    _wt_destroy "$root" "$dir"
+  else
+    read -r "reply?wt: $branch has $summary — remove it anyway? [y/N] "
+    case "$reply" in
+      [Yy]*) _wt_destroy "$root" "$dir" force ;;
+      *)     _wt_kept "$dir" "$sid" "$branch" ;;
+    esac
+  fi
+}
+
+_wt_kept() {
+  local dir=$1 ref=${2:0:8}
+  [ -z "$ref" ] && ref=$3
+  echo "wt: kept ${dir/#$HOME/~}"
+  [ -n "$ref" ] && echo "    resume: wt resume $ref     remove: wt rm $ref"
+  return 0
 }
